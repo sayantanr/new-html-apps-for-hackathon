@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Extreme Pomodoro — Immersive Timer</title>
+  <style>
+    :root{
+      --bg:#0b0f14; --glass: rgba(255,255,255,0.06); --accent: #ff6b35; --muted: rgba(255,255,255,0.6);
+      --glass-2: rgba(255,255,255,0.04);
+    }
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial; color:#eee}
+    /* full-screen ambient background area */
+    .stage{position:fixed;inset:0;overflow:hidden;background:linear-gradient(180deg,#041022 0%, #0b1420 100%);display:flex;align-items:center;justify-content:center}
+
+    /* scene canvases/illustrations (stacked) */
+    .scene{position:absolute;inset:0;pointer-events:none;transition:opacity 1.6s ease,filter 1.6s ease;opacity:0}
+    .scene.active{opacity:1;pointer-events:auto}
+
+    /* central timer card */
+    .card{position:relative;z-index:40;width:min(520px,92vw);max-width:720px;border-radius:18px;padding:28px;background:linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.02));box-shadow:0 10px 30px rgba(2,6,23,0.7);backdrop-filter: blur(12px) saturate(1.1);border:1px solid rgba(255,255,255,0.04);display:grid;grid-template-columns:1fr;place-items:center}
+
+    /* breathing scale animation */
+    @keyframes breathe{0%{transform:scale(1)}50%{transform:scale(1.02)}100%{transform:scale(1)}}
+    .card{animation:breathe 8s ease-in-out infinite}
+
+    /* timer ring container */
+    .timer-wrap{display:flex;flex-direction:column;align-items:center;gap:12px}
+    .label{font-size:14px;color:var(--muted);letter-spacing:1px}
+
+    /* big circular progress ring */
+    .ring{position:relative;width:320px;height:320px}
+    .ring svg{width:100%;height:100%;transform:rotate(-90deg)}
+    .time{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+    .time .count{font-weight:700;font-size:56px;letter-spacing:1px}
+    .time .sub{margin-top:6px;color:var(--muted);font-size:14px}
+
+    /* controls */
+    .controls{position:relative;z-index:60;display:flex;gap:14px;margin-top:18px}
+    button.ctrl{background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));border:0;padding:12px;border-radius:12px;backdrop-filter:blur(8px);cursor:pointer;box-shadow:0 6px 14px rgba(0,0,0,0.4);transition:transform .18s ease,box-shadow .18s ease}
+    button.ctrl:hover{transform:translateY(-4px);box-shadow:0 12px 30px rgba(0,0,0,0.5)}
+    .play{width:78px;height:78px;border-radius:50%;display:grid;place-items:center;font-size:22px}
+
+    /* floating controls row at bottom */
+    .floating-controls{position:fixed;left:50%;transform:translateX(-50%);bottom:24px;z-index:60;display:flex;gap:12px;align-items:center}
+
+    /* scene carousel thumbnails */
+    .carousel{display:flex;gap:10px;padding:8px;background:var(--glass);border-radius:12px;backdrop-filter:blur(6px);align-items:center}
+    .scene-thumb{width:60px;height:42px;border-radius:8px;overflow:hidden;flex:0 0 auto;border:2px solid transparent;cursor:pointer}
+    .scene-thumb.active{border-color:rgba(255,255,255,0.12)}
+
+    /* settings panel */
+    .settings{position:fixed;right:20px;top:20px;z-index:80}
+    .gear{background:var(--glass);padding:10px;border-radius:12px;backdrop-filter:blur(6px);cursor:pointer}
+    .panel{position:fixed;right:12px;top:72px;width:320px;max-width:92vw;background:linear-gradient(180deg,rgba(10,10,10,0.6),rgba(6,6,6,0.55));padding:16px;border-radius:12px;backdrop-filter:blur(10px);box-shadow:0 12px 40px rgba(2,6,23,0.75);transform:translateX(18px);opacity:0;pointer-events:none;transition:all .28s ease}
+    .panel.open{transform:translateX(0);opacity:1;pointer-events:auto}
+    .row{display:flex;justify-content:space-between;align-items:center;margin:10px 0}
+    input[type=range]{width:140px}
+
+    /* modal and toast */
+    .modal{position:fixed;left:50%;top:40%;transform:translate(-50%,-50%);z-index:120;background:var(--glass);padding:22px;border-radius:12px;backdrop-filter:blur(10px);display:none}
+    .modal.show{display:block}
+    .toast{position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:130;background:linear-gradient(180deg,rgba(0,0,0,0.6),rgba(0,0,0,0.45));padding:10px 18px;border-radius:10px;backdrop-filter:blur(6px);opacity:0;transition:all .4s}
+    .toast.show{opacity:1;transform:translate(-50%,0)}
+
+    /* session counter and task input */
+    .meta{display:flex;gap:12px;margin-top:12px;align-items:center}
+    .session-counter{display:flex;gap:6px}
+    .tomato{width:20px;height:20px;border-radius:50%;background:rgba(255,92,92,0.18);display:inline-block;border:2px solid rgba(255,92,92,0.08)}
+    .tomato.filled{background:var(--accent);box-shadow:0 6px 14px rgba(255,107,53,0.18)}
+    .task{background:transparent;border:0;border-bottom:1px dashed rgba(255,255,255,0.06);padding:6px;color:var(--muted);min-width:180px}
+
+    /* responsive */
+    @media (max-width:700px){.ring{width:220px;height:220px}.time .count{font-size:40px}.card{padding:18px}}
+
+    /* small helpers */
+    .small{font-size:12px;color:var(--muted)}
+
+    /* progress ring color variants */
+    .ring.focus .progress{stroke: #ff6b35}
+    .ring.short .progress{stroke: #2fb6ff}
+    .ring.long .progress{stroke: #9b7cff}
+
+    /* finish ripple */
+    .ripple{position:absolute;inset:0;border-radius:50%;pointer-events:none;opacity:0;transform:scale(.9);box-shadow:0 0 0 0 rgba(255,255,255,0.12)}
+    .ripple.show{animation:ripple 700ms ease-out forwards}
+    @keyframes ripple{to{opacity:1;transform:scale(1.4);box-shadow:0 0 90px 26px rgba(255,255,255,0.06)}}
+
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <!-- Scenes: implement 5 layered scenes -->
+    <div id="scene-rain" class="scene active" data-scene="rain">
+      <canvas id="rain-canvas"></canvas>
+    </div>
+    <div id="scene-forest" class="scene" data-scene="forest">
+      <div style="position:absolute;inset:0;display:flex;align-items:flex-end;justify-content:center;pointer-events:none">
+        <svg viewBox="0 0 1200 300" preserveAspectRatio="xMidYMax slice" style="width:100%;height:100%">
+          <defs>
+            <linearGradient id="sky" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#0b2f2a" stop-opacity="1"/><stop offset="1" stop-color="#092019" stop-opacity="1"/></linearGradient>
+          </defs>
+          <rect x="0" y="0" width="1200" height="300" fill="url(#sky)"/>
+          <!-- simple tree silhouettes -->
+          <g fill="rgba(0,0,0,0.08)">
+            <ellipse cx="200" cy="260" rx="280" ry="40"/>
+            <ellipse cx="650" cy="270" rx="350" ry="40"/>
+          </g>
+        </svg>
+      </div>
+    </div>
+    <div id="scene-ocean" class="scene" data-scene="ocean">
+      <svg viewBox="0 0 800 400" preserveAspectRatio="xMidYMid slice" style="width:100%;height:100%">
+        <defs>
+          <linearGradient id="oceanGrad" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#0b3a52"/><stop offset="1" stop-color="#061728"/></linearGradient>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#oceanGrad)" />
+        <g id="waves" opacity="0.9">
+          <path d="M0 300 C150 260 300 340 450 300 C600 260 750 340 900 300 L900 400 L0 400 Z" fill="#063a55"/>
+        </g>
+      </svg>
+    </div>
+    <div id="scene-cafe" class="scene" data-scene="cafe">
+      <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(20,12,10,0.25),rgba(10,6,4,0.35))"></div>
+      <div style="position:absolute;inset:0;filter:blur(10px) saturate(1.2);opacity:0.9;background-image:radial-gradient(circle at 20% 30%, rgba(255,200,120,0.06) 0 4%, transparent 12%), radial-gradient(circle at 70% 60%, rgba(255,160,100,0.04) 0 6%, transparent 14%)"></div>
+    </div>
+    <div id="scene-space" class="scene" data-scene="space">
+      <canvas id="space-canvas"></canvas>
+    </div>
+
+    <!-- Timer card -->
+    <div class="card" role="application" aria-label="Pomodoro timer">
+      <div class="timer-wrap">
+        <div class="label" id="sessionLabel">Focus</div>
+        <div class="ring focus" id="ringWrap">
+          <div class="ripple" id="ripple"></div>
+          <svg viewBox="0 0 100 100">
+            <defs>
+              <linearGradient id="grad1" x1="0%" x2="100%"><stop offset="0%" stop-color="#ffb199"/><stop offset="100%" stop-color="#ff6b35"/></linearGradient>
+            </defs>
+            <circle cx="50" cy="50" r="45" stroke="rgba(255,255,255,0.04)" stroke-width="8" fill="none"></circle>
+            <circle class="progress" cx="50" cy="50" r="45" stroke="#ff6b35" stroke-width="8" stroke-linecap="round" fill="none" stroke-dasharray="283" stroke-dashoffset="0"/>
+          </svg>
+          <div class="time" id="timeBox">
+            <div class="count" id="timeText">25:00</div>
+            <div class="sub" id="subText">Ready</div>
+          </div>
+        </div>
+
+        <div class="controls" aria-hidden="false">
+          <button class="ctrl" id="resetBtn" title="Reset">⟲</button>
+          <button class="ctrl play" id="playBtn" title="Start/Pause">▶</button>
+          <button class="ctrl" id="skipBtn" title="Skip (hover to reveal)">⟶</button>
+        </div>
+
+        <div class="meta">
+          <div class="session-counter" id="counter"> </div>
+          <input class="task" id="taskInput" placeholder="Task (optional) - What are you working on?" />
+        </div>
+
+      </div>
+    </div>
+
+    <!-- floating controls bottom -->
+    <div class="floating-controls">
+      <div class="carousel" id="thumbs">
+        <div class="scene-thumb active" data-target="rain" title="Rain"><canvas width="60" height="42"></canvas></div>
+        <div class="scene-thumb" data-target="forest" title="Forest"><canvas width="60" height="42"></canvas></div>
+        <div class="scene-thumb" data-target="ocean" title="Ocean"><canvas width="60" height="42"></canvas></div>
+        <div class="scene-thumb" data-target="cafe" title="Cafe"><canvas width="60" height="42"></canvas></div>
+        <div class="scene-thumb" data-target="space" title="Space"><canvas width="60" height="42"></canvas></div>
+      </div>
+    </div>
+
+    <!-- settings gear -->
+    <div class="settings">
+      <div class="gear" id="gear">⚙</div>
+      <div class="panel" id="panel">
+        <div class="row"><div>Focus</div><div><input type="number" id="focusMin" value="25" min="1" style="width:68px"/> min</div></div>
+        <div class="row"><div>Short Break</div><div><input type="number" id="shortMin" value="5" min="1" style="width:68px"/> min</div></div>
+        <div class="row"><div>Long Break</div><div><input type="number" id="longMin" value="15" min="1" style="width:68px"/> min</div></div>
+        <div class="row"><div>Auto-start next</div><div><input type="checkbox" id="autoStart" checked/></div></div>
+        <div class="row"><div>Notifications</div><div><input type="checkbox" id="notifyToggle" checked/></div></div>
+        <div class="row"><div>Ambient audio</div><div><input type="checkbox" id="audioToggle" checked/></div></div>
+        <div class="row"><div>Volume</div><div><input type="range" id="volume" min="0" max="1" step="0.01" value="0.45"/></div></div>
+        <div class="row"><button id="fullscreenBtn" class="ctrl">Fullscreen</button><button id="closePanel" class="ctrl">Close</button></div>
+      </div>
+    </div>
+
+    <!-- modal -->
+    <div class="modal" id="modal"><div id="modalText">Time finished</div><div style="display:flex;gap:8px;margin-top:10px"><button id="modalOk" class="ctrl">OK</button><button id="modalSkip" class="ctrl">Skip</button></div></div>
+
+    <!-- toast -->
+    <div class="toast" id="toast">Notification</div>
+
+  </div>
+
+  <script>
+    // --- Core state ---
+    const state = {
+      mode: 'focus', // focus | short | long
+      focus: 25*60, short:5*60, long:15*60,
+      remaining: 25*60,
+      running: false,
+      interval:null,
+      completed:0,
+      autoNext:true,
+      notify:true,
+      audio:true
+    };
+
+    // elements
+    const timeText = document.getElementById('timeText');
+    const subText = document.getElementById('subText');
+    const playBtn = document.getElementById('playBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const skipBtn = document.getElementById('skipBtn');
+    const counter = document.getElementById('counter');
+    const sessionLabel = document.getElementById('sessionLabel');
+    const ring = document.querySelector('.ring .progress');
+    const ringWrap = document.getElementById('ringWrap');
+    const ripple = document.getElementById('ripple');
+
+    // settings
+    const focusMin = document.getElementById('focusMin');
+    const shortMin = document.getElementById('shortMin');
+    const longMin = document.getElementById('longMin');
+    const autoStart = document.getElementById('autoStart');
+    const notifyToggle = document.getElementById('notifyToggle');
+    const audioToggle = document.getElementById('audioToggle');
+    const volume = document.getElementById('volume');
+    const gear = document.getElementById('gear');
+    const panel = document.getElementById('panel');
+    const toast = document.getElementById('toast');
+
+    // audio context & simple ambient generator
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    let audioCtx = null;
+    let ambientNodes = [];
+
+    // init durations
+    function updateDurations(){
+      state.focus = Math.max(1,parseInt(focusMin.value))*60;
+      state.short = Math.max(1,parseInt(shortMin.value))*60;
+      state.long = Math.max(1,parseInt(longMin.value))*60;
+      if(state.mode==='focus') state.remaining = state.focus;
+      else if(state.mode==='short') state.remaining = state.short;
+      else state.remaining = state.long;
+      renderTime();
+    }
+    focusMin.addEventListener('change', updateDurations);
+    shortMin.addEventListener('change', updateDurations);
+    longMin.addEventListener('change', updateDurations);
+    autoStart.addEventListener('change', ()=> state.autoNext = autoStart.checked);
+    notifyToggle.addEventListener('change', ()=> state.notify = notifyToggle.checked);
+    audioToggle.addEventListener('change', ()=> state.audio = audioToggle.checked);
+
+    // render session counter
+    function renderCounter(){
+      counter.innerHTML = '';
+      for(let i=0;i<4;i++){
+        const t = document.createElement('div'); t.className='tomato'; if(i<state.completed) t.classList.add('filled'); counter.appendChild(t);
+      }
+    }
+
+    // time formatting and progress
+    function renderTime(){
+      const m = Math.floor(state.remaining/60); const s = state.remaining%60;
+      timeText.textContent = String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+      const total = (state.mode==='focus'?state.focus: state.mode==='short'?state.short:state.long);
+      const pct = state.remaining/total;
+      const dash = 2*Math.PI*45*(1-pct);
+      ring.style.strokeDashoffset = dash;
+      // session label color
+      const lab = state.mode==='focus'? 'Focus' : state.mode==='short'? 'Short Break':'Long Break';
+      sessionLabel.textContent = lab;
+      if(state.mode==='focus'){ ringWrap.classList.remove('short','long'); ringWrap.classList.add('focus') }
+      if(state.mode==='short'){ ringWrap.classList.remove('focus','long'); ringWrap.classList.add('short') }
+      if(state.mode==='long'){ ringWrap.classList.remove('focus','short'); ringWrap.classList.add('long') }
+    }
+
+    // tick function
+    function tick(){
+      if(state.running && state.remaining>0){
+        state.remaining--; renderTime();
+        // subtle tick pulse
+        if(state.remaining%60===0) { /* minute */ }
+      } else if(state.running && state.remaining<=0){
+        onFinish();
+      }
+    }
+
+    function start(){
+      if(!state.running){
+        state.running=true; playBtn.textContent='❚❚';
+        if(!audioCtx && state.audio) audioCtx = new AudioCtx();
+        if(state.audio) startAmbient();
+        state.interval = setInterval(tick,1000);
+      }
+    }
+    function pause(){
+      state.running=false; playBtn.textContent='▶';
+      if(state.interval) clearInterval(state.interval);
+      stopAmbient();
+    }
+    function reset(){
+      pause();
+      state.remaining = (state.mode==='focus'?state.focus:state.mode==='short'?state.short:state.long);
+      renderTime();
+    }
+
+    function toggle(){ if(state.running) pause(); else start(); }
+
+    // when a session finishes
+    function onFinish(){
+      pause();
+      // visual ripple
+      ripple.classList.add('show'); setTimeout(()=>ripple.classList.remove('show'),900);
+      // audio chime
+      playChime();
+      // notification & modal
+      showToast(state.mode==='focus'? 'Focus complete! Time for a break.' : 'Break over! Back to focus.');
+      if(state.notify && Notification && Notification.permission==='granted'){
+        new Notification(state.mode==='focus'? 'Time for a break!':'Back to focus!');
+      }
+      // increment completed only when focus finished
+      if(state.mode==='focus') state.completed = Math.min(4,state.completed+1);
+      renderCounter();
+
+      // decide next mode
+      if(state.mode==='focus'){
+        // simple rule: every 4 focus -> long break
+        const next = (state.completed%4===0)?'long':'short';
+        state.mode = next;
+      } else {
+        state.mode = 'focus';
+      }
+      // reset remaining to next mode value
+      state.remaining = (state.mode==='focus'?state.focus:state.mode==='short'?state.short:state.long);
+      renderTime();
+
+      // auto-start next session if enabled
+      if(state.autoNext){ setTimeout(()=> start(), 800); }
+      else {
+        // show modal offering skip/play
+        showModal(state.mode==='focus'? 'Back to focus!' : 'Time for a break!');
+      }
+    }
+
+    // skip session
+    function skip(){ pause(); state.remaining=0; onFinish(); }
+
+    // UI wiring
+    playBtn.addEventListener('click', ()=>{ toggle(); });
+    resetBtn.addEventListener('click', ()=>{ reset(); showToast('Reset'); });
+    skipBtn.addEventListener('click', ()=>{ skip(); });
+
+    // hover reveal skip bigger
+    skipBtn.addEventListener('mouseenter', ()=> skipBtn.style.transform='translateX(6px)');
+    skipBtn.addEventListener('mouseleave', ()=> skipBtn.style.transform='translateX(0)');
+
+    // modal
+    const modal = document.getElementById('modal'); const modalText = document.getElementById('modalText');
+    document.getElementById('modalOk').addEventListener('click', ()=> { modal.classList.remove('show'); });
+    document.getElementById('modalSkip').addEventListener('click', ()=>{ skip(); modal.classList.remove('show'); });
+    function showModal(txt){ modalText.textContent = txt; modal.classList.add('show'); setTimeout(()=> modal.classList.remove('show'), 9000); }
+
+    // toast
+    function showToast(txt){ toast.textContent = txt; toast.classList.add('show'); setTimeout(()=> toast.classList.remove('show'), 3500); }
+
+    // session counter initial
+    renderCounter(); renderTime();
+
+    // thumbnails & scene switching
+    const thumbs = document.querySelectorAll('.scene-thumb');
+    const scenes = document.querySelectorAll('.scene');
+    thumbs.forEach(t=> t.addEventListener('click', ()=>{
+      thumbs.forEach(x=>x.classList.remove('active')); t.classList.add('active');
+      const target = t.dataset.target;
+      scenes.forEach(s=> s.classList.toggle('active', s.dataset.scene===target));
+      // scene-specific audio control
+    }));
+
+    // settings panel
+    gear.addEventListener('click', ()=> panel.classList.toggle('open'));
+    document.getElementById('closePanel').addEventListener('click', ()=> panel.classList.remove('open'));
+    document.getElementById('fullscreenBtn').addEventListener('click', ()=>{
+      if(!document.fullscreenElement) document.documentElement.requestFullscreen(); else document.exitFullscreen();
+    });
+
+    // Task input persist
+    const taskInput = document.getElementById('taskInput'); taskInput.addEventListener('change', ()=> localStorage.setItem('pomodoro_task', taskInput.value));
+    taskInput.value = localStorage.getItem('pomodoro_task')||'';
+
+    // Notification permission
+    if('Notification' in window && Notification.permission!=='granted'){
+      Notification.requestPermission();
+    }
+
+    // --- Ambient audio generation (simple noise + tonal chime) ---
+    function startAmbient(){ if(!state.audio || !audioCtx) return; stopAmbient(); // create simple noise for rain/coffee, and low oscillator for space/forest
+      const vol = audioCtx.createGain(); vol.gain.value = parseFloat(volume.value); vol.connect(audioCtx.destination); ambientNodes.push(vol);
+      const noise = audioCtx.createBufferSource(); const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate*2, audioCtx.sampleRate); const data = buffer.getChannelData(0); for(let i=0;i<data.length;i++) data[i]=(Math.random()*2-1)*0.2; noise.buffer = buffer; noise.loop=true; const noiseFilter = audioCtx.createBiquadFilter(); noiseFilter.type='lowpass'; noiseFilter.frequency.value = 1200; noise.connect(noiseFilter); noiseFilter.connect(vol); noise.start(); ambientNodes.push(noise);
+      // gentle synth pad
+      const osc = audioCtx.createOscillator(); osc.type='sine'; osc.frequency.value = 110; const g = audioCtx.createGain(); g.gain.value = 0.0025; osc.connect(g); g.connect(vol); osc.start(); ambientNodes.push(osc);
+    }
+    function stopAmbient(){ ambientNodes.forEach(n=>{ try{ if(n.stop) n.stop(); if(n.disconnect) n.disconnect(); }catch(e){} }); ambientNodes=[]; }
+
+    // chime
+    function playChime(){ if(!audioCtx && !state.audio) return; if(!audioCtx) audioCtx = new AudioCtx(); const g = audioCtx.createGain(); g.gain.value = parseFloat(volume.value)||0.4; g.connect(audioCtx.destination);
+      const o = audioCtx.createOscillator(); o.type='sine'; o.frequency.value = 880; o.connect(g); o.start(); setTimeout(()=>{ o.frequency.value = 660; setTimeout(()=>{ g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime+1); o.stop(audioCtx.currentTime+1.1); },120); },120);
+    }
+
+    // small helper: apply settings from UI to state
+    focusMin.addEventListener('input', ()=> updateDurations()); shortMin.addEventListener('input', ()=> updateDurations()); longMin.addEventListener('input', ()=> updateDurations()); volume.addEventListener('input', ()=>{});
+
+    // keybindings
+    document.addEventListener('keydown', (e)=>{
+      if(e.code==='Space'){ e.preventDefault(); toggle(); }
+      if(e.key==='r') { reset(); }
+      if(e.key==='s') { skip(); }
+    });
+
+    // rain canvas implementation
+    (function initRain(){
+      const c = document.getElementById('rain-canvas'); const ctx = c.getContext('2d'); function resize(){ c.width = innerWidth; c.height = innerHeight; }
+      window.addEventListener('resize', resize); resize();
+      const drops = [];
+      function spawn(){ drops.push({x:Math.random()*c.width, y:-10, l:8+Math.random()*18, vx:-0.2+Math.random()*0.4, vy:4+Math.random()*6}); }
+      for(let i=0;i<200;i++) spawn();
+      function loop(){ ctx.clearRect(0,0,c.width,c.height); ctx.fillStyle='rgba(255,255,255,0.03)'; for(let i=0;i<drops.length;i++){ const d=drops[i]; ctx.beginPath(); ctx.moveTo(d.x,d.y); ctx.lineTo(d.x+d.vx*d.l, d.y+d.vy*d.l); ctx.strokeStyle='rgba(200,220,255,0.06)'; ctx.lineWidth=1.2; ctx.stroke(); d.x+=d.vx; d.y+=d.vy; if(d.y>c.height+20){ drops.splice(i,1); i--; spawn(); } }
+        requestAnimationFrame(loop);
+      }
+      loop();
+    })();
+
+    // simple space starfield
+    (function initSpace(){
+      const c = document.getElementById('space-canvas'); const ctx = c.getContext('2d'); function resize(){ c.width = innerWidth; c.height = innerHeight; }
+      window.addEventListener('resize', resize); resize();
+      const stars = []; for(let i=0;i<300;i++) stars.push({x:Math.random()*c.width,y:Math.random()*c.height,z:Math.random()*1.2});
+      function loop(){ ctx.fillStyle='rgba(2,6,15,0.9)'; ctx.fillRect(0,0,c.width,c.height);
+        for(let s of stars){ const size = (s.z*2.4); ctx.fillStyle='rgba(255,255,255,'+(0.6+0.4*Math.random())+')'; ctx.fillRect(s.x,s.y,size,size); s.x -= 0.15*s.z; if(s.x<0) s.x=c.width; }
+        requestAnimationFrame(loop);
+      }
+      loop();
+    })();
+
+    // small scene-thumb mini render (just simple colors) -> paint canvases under thumbnails
+    (function paintThumbs(){ const mapping={'rain':'#083045','forest':'#052a20','ocean':'#08293b','cafe':'#1e1310','space':'#030417'}; document.querySelectorAll('.scene-thumb').forEach((el)=>{ const cv = el.querySelector('canvas'); const ctx = cv.getContext('2d'); ctx.fillStyle=mapping[el.dataset.target]||'#123'; ctx.fillRect(0,0,cv.width,cv.height); }); })();
+
+    // initial render
+    renderTime();
+
+    // save/load state to localstorage
+    window.addEventListener('beforeunload', ()=>{ localStorage.setItem('pomodoro_state', JSON.stringify({completed: state.completed, task: taskInput.value})); });
+    (function loadSaved(){ try{ const p = JSON.parse(localStorage.getItem('pomodoro_state')||'{}'); if(p){ state.completed = p.completed||0; taskInput.value = p.task||''; renderCounter(); } }catch(e){} })();
+
+  </script>
+</body>
+</html>
